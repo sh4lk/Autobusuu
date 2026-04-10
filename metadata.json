@@ -1,0 +1,5 @@
+{
+  "name": "Busuu Auto-Solver Control",
+  "description": "Interface de gestion pour le bot Busuu : configuration du LLM, logs d'activité et résolveur manuel assisté par IA.",
+  "requestFramePermissions": []
+}
