@@ -62,122 +62,45 @@ const runAutomationLoop = async () => {
 
       // 0. Speaking exercise page
       if (page.url().includes('/speaking/')) {
-
-          // Clic sur "Continuer" via JavaScript .click() après l'avoir scrollé dans la vue
-          // puis fallback CDP pour cliquer même hors viewport
-          const clickContinuer = async () => {
-              // Méthode directe : JavaScript .click() fonctionne même hors viewport
-              const found = await page.evaluate(() => {
-                  const buttons = Array.from(document.querySelectorAll('button'));
-                  const btn = buttons.find(b => {
-                      const t = b.textContent?.trim().toLowerCase();
-                      return b.offsetParent !== null && (t === 'continuer' || t === 'continue');
-                  });
-                  if (!btn) return false;
-                  // Forcer le scroll pour le mettre dans la vue
-                  btn.scrollIntoView({ block: 'center', behavior: 'instant' });
-                  return true;
-              });
-              if (!found) return false;
-              await delay(400);
-
-              // Récupérer les coords après scroll
-              const coords = await page.evaluate(() => {
-                  const buttons = Array.from(document.querySelectorAll('button'));
-                  const btn = buttons.find(b => {
-                      const t = b.textContent?.trim().toLowerCase();
-                      return b.offsetParent !== null && (t === 'continuer' || t === 'continue');
-                  });
-                  if (!btn) return null;
-                  const r = btn.getBoundingClientRect();
-                  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-              });
-
-              if (coords) {
-                  // Utiliser CDP pour envoyer un clic bas niveau qui bypass les limites du viewport
-                  const cdp = await page.createCDPSession();
-                  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
-                  await delay(50);
-                  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
-                  await cdp.detach();
-              }
-              return true;
-          };
-
-          // Étape 1 : vérifier si le bouton micro est présent (= on est sur l'exercice)
           const micBtn = await page.$('[data-testid="ex-record-animated-button"], [data-testid="ex-record-start-button"]');
 
           if (micBtn) {
-              addLog('info', 'Exercice oral: lancement de l\'enregistrement...');
+              addLog('info', 'Exercice oral détecté. Tentative de passage (Skip)...');
 
-              // Clic sur le bouton micro pour démarrer
-              await micBtn.click();
-              await delay(800);
-
-              // Gérer le popup de permission micro si présent
-              const permBtn = await page.$('.modal-microphone__button');
-              if (permBtn) {
-                  addLog('info', 'Popup permission micro. Fermeture...');
-                  await permBtn.click();
-                  await delay(800);
-                  try { await micBtn.click(); } catch(e) {}
-                  await delay(800);
-              }
-
-              // Attendre un peu que l'enregistrement démarre vraiment
-              await delay(600);
-
-              // Arrêt immédiat → enregistrement vide → Busuu refuse → affiche "Continuer"
-              addLog('info', 'Arrêt de l\'enregistrement...');
-              const stopBtn = await page.$('[data-testid="ex-record-stop-button"], [data-testid="ex-record-submit-button"]');
-              if (stopBtn) {
-                  await stopBtn.click();
-              } else {
-                  // Toggle : reclique sur le bouton micro pour stopper
-                  try { await micBtn.click(); } catch(e) {}
-              }
-
-              // Attendre jusqu'à 8s que la page de feedback apparaisse
-              addLog('info', 'Attente de la page de résultat...');
-              for (let i = 0; i < 8; i++) {
-                  await delay(1000);
-                  const hasContinuer = await page.evaluate(() => {
-                      const buttons = Array.from(document.querySelectorAll('button'));
-                      return buttons.some(b => {
-                          const t = b.textContent?.trim().toLowerCase();
-                          return b.offsetParent !== null && (t === 'continuer' || t === 'continue');
-                      });
+              const skipped = await page.evaluate(() => {
+                  const selectors = ['[data-testid="skip_button"]', '[data-qa="skip-button"]', '[data-qa="skip"]'];
+                  for (const sel of selectors) {
+                      const btn = document.querySelector(sel);
+                      if (btn && btn.offsetParent !== null) { btn.click(); return true; }
+                  }
+                  const buttons = Array.from(document.querySelectorAll('button, a'));
+                  const targetBtn = buttons.find(b => {
+                      const text = b.textContent?.trim().toLowerCase();
+                      return b.offsetParent !== null && (
+                          text === 'passer' || 
+                          text === 'skip' || 
+                          text.includes('je ne peux pas parler') ||
+                          text.includes('can\'t speak')
+                      );
                   });
-                  if (hasContinuer) break;
-              }
-          }
+                  if (targetBtn) { targetBtn.click(); return true; }
+                  return false;
+              });
 
-          // Étape 2 : cliquer "Continuer"
-          const urlBefore = page.url();
-          const clicked = await clickContinuer();
-
-          if (clicked) {
-              await delay(2000);
-              if (page.url() !== urlBefore) {
-                  addLog('success', 'Exercice oral terminé.');
+              if (skipped) {
+                  addLog('success', 'Exercice oral ignoré via le bouton Passer.');
               } else {
-                  // Fallback clavier : focus + Enter
-                  addLog('info', 'Clic souris pas suffisant, essai clavier...');
+                  addLog('warning', 'Bouton Passer introuvable, tentative du bouton Continuer...');
                   await page.evaluate(() => {
                       const buttons = Array.from(document.querySelectorAll('button'));
                       const btn = buttons.find(b => {
                           const t = b.textContent?.trim().toLowerCase();
                           return b.offsetParent !== null && (t === 'continuer' || t === 'continue');
                       });
-                      if (btn) btn.focus();
+                      if (btn) btn.click();
                   });
-                  await delay(200);
-                  await page.keyboard.press('Enter');
-                  await delay(2000);
-                  addLog('success', 'Exercice oral: Enter envoyé.');
               }
-          } else {
-              addLog('warning', 'Bouton Continuer non trouvé.');
+              await delay(2000);
           }
           continue;
       }
@@ -188,9 +111,14 @@ const runAutomationLoop = async () => {
           const lessonFound = await page.evaluate(() => {
               const cards = Array.from(document.querySelectorAll('[data-testid="lesson_card"]'));
               for (const card of cards) {
-                  // Skip lessons "Conversations avec l'IA" and "Entraînement oral"
+                  // Skip lessons that are oral or conversation based
                   const txt = (card.textContent || '').toLowerCase();
-                  if (txt.includes('conversation') || txt.includes('entraînement oral') || txt.includes('entrainement oral') || txt.includes('oral practice') || txt.includes('ai conversation')) {
+                  const skipKeywords = [
+                      'conversation', 'entraînement oral', 'entrainement oral', 
+                      'oral practice', 'ai conversation', 'prononciation', 
+                      'pronunciation', 'expression orale', 'speaking', 'oral'
+                  ];
+                  if (skipKeywords.some(kw => txt.includes(kw))) {
                       continue;
                   }
                   const progressBar = card.querySelector('[role="progressbar"]');
@@ -336,77 +264,54 @@ const runAutomationLoop = async () => {
       // 0.8 Microphone button inside a regular lesson
       const micBtn = await page.$('[data-testid="ex-record-animated-button"]');
       if (micBtn) {
-          addLog('info', 'Bouton micro détecté. Lancement enregistrement...');
-
-          // Real click helper by Puppeteer ElementHandle
-          const realClick = async (el) => {
-              try { await el.click(); }
-              catch(e) {
-                  const box = await el.boundingBox();
-                  if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          addLog('info', 'Exercice oral détecté. Recherche du bouton Passer...');
+          
+          const skipped = await page.evaluate(() => {
+              const selectors = [
+                  '[data-testid="skip_button"]',
+                  '[data-qa="skip-button"]',
+                  '[data-qa="skip"]'
+              ];
+              for (const sel of selectors) {
+                  const btn = document.querySelector(sel);
+                  if (btn && btn.offsetParent !== null) {
+                      btn.click();
+                      return true;
+                  }
               }
-          };
-
-          // Start recording
-          await realClick(micBtn);
-          await delay(500);
-
-          // Handle mic permission popup
-          const permBtn = await page.$('.modal-microphone__button');
-          if (permBtn) {
-              addLog('info', 'Popup permission micro. Fermeture...');
-              await permBtn.click();
-              await delay(600);
-              try { await realClick(micBtn); } catch(e) {}
-              await delay(500);
-          }
-
-          // Stop immédiat → enregistrement vide → Busuu refuse → affiche feedback + "Continuer"
-          addLog('info', 'Arrêt immédiat de l\'enregistrement...');
-          await delay(300);
-          const stopBtn = await page.$('[data-testid="ex-record-stop-button"], [data-testid="ex-record-submit-button"]');
-          if (stopBtn) {
-              await realClick(stopBtn);
-          } else {
-              try { await realClick(micBtn); } catch(e) {}
-          }
-
-          // Attendre la page de feedback (max 6s)
-          for (let i = 0; i < 8; i++) {
-              await delay(800);
-              const hasContinuer = await page.evaluate(() => {
-                  const buttons = Array.from(document.querySelectorAll('button'));
-                  return buttons.some(b => {
-                      const t = b.textContent?.trim().toLowerCase();
-                      return b.offsetParent !== null && (t === 'continuer' || t === 'continue');
-                  });
+              const buttons = Array.from(document.querySelectorAll('button, a'));
+              const targetBtn = buttons.find(b => {
+                  const text = b.textContent?.trim().toLowerCase();
+                  return b.offsetParent !== null && (
+                      text === 'passer' || 
+                      text === 'skip' || 
+                      text.includes('je ne peux pas parler') ||
+                      text.includes('can\'t speak')
+                  );
               });
-              if (hasContinuer) break;
-          }
-
-          // Clic réel sur "Continuer"
-          const continuerHandle = await page.evaluateHandle(() => {
-              const buttons = Array.from(document.querySelectorAll('button'));
-              return buttons.find(b => {
-                  const t = b.textContent?.trim().toLowerCase();
-                  return b.offsetParent !== null && (t === 'continuer' || t === 'continue');
-              }) || null;
-          });
-          const continuerEl = continuerHandle.asElement();
-          if (continuerEl) {
-              try { await continuerEl.click(); }
-              catch(e) {
-                  const box = await continuerEl.boundingBox();
-                  if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+              if (targetBtn) {
+                  targetBtn.click();
+                  return true;
               }
-              addLog('success', 'Exercice micro: "Continuer" cliqué.');
+              return false;
+          });
+
+          if (skipped) {
+              addLog('success', 'Exercice oral ignoré via le bouton Passer.');
           } else {
-              addLog('warning', 'Exercice micro: pas de bouton "Continuer" trouvé.');
+              addLog('warning', 'Bouton Passer introuvable, clic sur Continuer par défaut...');
+              await page.evaluate(() => {
+                  const buttons = Array.from(document.querySelectorAll('button'));
+                  const btn = buttons.find(b => {
+                      const text = b.textContent?.trim().toLowerCase();
+                      return b.offsetParent !== null && (text === 'continuer' || text === 'continue');
+                  });
+                  if (btn) btn.click();
+              });
           }
           await delay(2000);
           continue;
       }
-
       // 0.9 Check for Post Lesson Progress Bar
       const postLessonClicked = await page.evaluate(() => {
           const span = document.querySelector('span[data-testid="postlessonprogressbar"]');
@@ -423,23 +328,53 @@ const runAutomationLoop = async () => {
       }
 
       // 0.10 Check for Writing/Feedback Exercise
-      const writingBtn = await page.$('[data-testid="writing-button"]');
-      if (writingBtn) {
-          addLog('success', 'Exercice d\'écriture détecté. Clic sur Write...');
-          await writingBtn.click();
-          await delay(1000);
+      const isCommunityExercise = await page.evaluate(() => {
+          // Check for "Write" / "Speak" buttons
+          const btns = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
+          const writeBtn = btns.find(b => {
+              const t = (b.textContent || '').trim().toLowerCase();
+              return b.offsetParent !== null && !b.disabled && (
+                  t === 'write' || t === 'écrire' || 
+                  b.getAttribute('data-testid') === 'writing-button' ||
+                  (b.querySelector('svg') && (b.innerHTML.includes('edit') || b.innerHTML.includes('pen') || b.innerHTML.includes('writ')))
+              );
+          });
+          if (writeBtn) {
+              writeBtn.click();
+              return 'SWITCHED';
+          }
 
-          const textAreaSelector = 'textarea#answer';
-          const sendSelector = '[data-qa-send-community]';
+          // Check if we are already in the writing textarea screen
+          const textareas = Array.from(document.querySelectorAll('textarea'));
+          const isWritingScreen = textareas.some(ta => ta.offsetParent !== null) && 
+              document.body.innerText.match(/reste\s+(\d+)\s+mots?|(\d+)\s+words?\s+left/i);
+          
+          if (isWritingScreen) return 'WRITING_SCREEN';
+          return null;
+      });
 
-          // Base sentence, will be extended until word counter is satisfied
+      if (isCommunityExercise === 'SWITCHED') {
+          addLog('success', 'Exercice de communauté détecté. Clic sur Write (écrire)...');
+          await delay(2000);
+          continue;
+      } else if (isCommunityExercise === 'WRITING_SCREEN') {
+          addLog('info', 'Écran d\'écriture de la communauté détecté. Saisie du texte...');
+          
+          const textAreaSelector = 'textarea';
+          
           const baseText = "I am learning a lot and enjoying the lessons very much, I really like this language and I practice it every day with friends and family because it is fun and useful for travel and work.";
           let answerText = baseText;
-          addLog('info', `Saisie de la réponse initiale...`);
-
+          
           const fillText = async (txt) => {
               try {
-                  await page.evaluate((sel) => { const el = document.querySelector(sel); if(el){ el.focus(); el.value=''; el.dispatchEvent(new Event('input',{bubbles:true})); } }, textAreaSelector);
+                  await page.evaluate((sel) => { 
+                      const el = document.querySelector(sel); 
+                      if(el){ 
+                          el.focus(); 
+                          el.value=''; 
+                          el.dispatchEvent(new Event('input',{bubbles:true})); 
+                      } 
+                  }, textAreaSelector);
                   await page.type(textAreaSelector, txt);
               } catch(e) {
                   await page.evaluate((sel, t) => {
@@ -452,11 +387,9 @@ const runAutomationLoop = async () => {
           await fillText(answerText);
           await delay(800);
 
-          // Read remaining-words counter and top up until 0
           const getRemaining = async () => {
               return await page.evaluate(() => {
-                  const body = document.body.innerText || '';
-                  const m = body.match(/reste\s+(\d+)\s+mots?|(\d+)\s+words?\s+left/i);
+                  const m = document.body.innerText.match(/reste\s+(\d+)\s+mots?|(\d+)\s+words?\s+left/i);
                   if (!m) return 0;
                   return parseInt(m[1] || m[2] || '0', 10);
               });
@@ -475,12 +408,25 @@ const runAutomationLoop = async () => {
           await delay(500);
 
           // Click Send
-          const sendBtn = await page.$(sendSelector);
-          if (sendBtn) {
-              addLog('success', 'Envoi à la communauté...');
-              await sendBtn.click();
-              await delay(3000);
-          }
+          await page.evaluate(() => {
+              const sendQa = document.querySelector('[data-qa-send-community], [data-qa="send-community"]');
+              if (sendQa && sendQa.offsetParent !== null && !sendQa.disabled) {
+                  sendQa.click();
+                  return;
+              }
+              const buttons = Array.from(document.querySelectorAll('button'));
+              const sendBtn = buttons.find(b => {
+                  const t = (b.textContent || '').toLowerCase();
+                  const dataQa = (b.getAttribute('data-qa') || '').toLowerCase();
+                  return b.offsetParent !== null && !b.disabled && (
+                      t.includes('envoyer') || t.includes('send') || dataQa.includes('send')
+                  );
+              });
+              if (sendBtn) sendBtn.click();
+          });
+          
+          addLog('success', 'Exercice de communauté envoyé !');
+          await delay(3000);
           continue;
       }
 
